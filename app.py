@@ -3,12 +3,17 @@ import aisuite as ai
 import os
 from typing import Optional
 
-# Configuration
-MODEL_NAME = "groq:llama-3.1-8b-instant"
-TEMPERATURE = 0.7
+# Configuration - make these mutable by using a config dictionary
+CONFIG = {
+    "MODEL_NAME": "groq:llama-3.1-8b-instant",
+    "TEMPERATURE": 0.7,
+    "MAX_TOKENS_RESEARCH": 500,
+    "MAX_TOKENS_WRITER": 300
+}
 
 class TwoAgentFlow:
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, temperature: float = 0.7, 
+                 max_tokens_research: int = 500, max_tokens_writer: int = 300):
         """Initialize the two-agent flow with Groq API key."""
         if api_key:
             os.environ["GROQ_API_KEY"] = api_key
@@ -17,6 +22,10 @@ class TwoAgentFlow:
             raise ValueError("GROQ_API_KEY is not set. Please provide your API key.")
         
         self.client = ai.Client()
+        self.temperature = temperature
+        self.max_tokens_research = max_tokens_research
+        self.max_tokens_writer = max_tokens_writer
+        self.model_name = CONFIG["MODEL_NAME"]
     
     def research_agent(self, topic: str) -> str:
         """Agent 1: Research agent that gathers raw data."""
@@ -33,10 +42,10 @@ class TwoAgentFlow:
         
         try:
             response = self.client.chat.completions.create(
-                model=MODEL_NAME,
+                model=self.model_name,
                 messages=research_prompt,
-                temperature=TEMPERATURE,
-                max_tokens=500
+                temperature=self.temperature,
+                max_tokens=self.max_tokens_research
             )
             
             raw_data = response.choices[0].message.content
@@ -61,10 +70,10 @@ class TwoAgentFlow:
         
         try:
             response = self.client.chat.completions.create(
-                model=MODEL_NAME,
+                model=self.model_name,
                 messages=writer_prompt,
-                temperature=TEMPERATURE,
-                max_tokens=300
+                temperature=self.temperature,
+                max_tokens=self.max_tokens_writer
             )
             
             final_output = response.choices[0].message.content
@@ -128,6 +137,9 @@ st.markdown("""
         border: 1px solid #b8daff;
         margin-bottom: 1rem;
     }
+    .stAlert {
+        margin-top: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,7 +185,8 @@ with st.sidebar:
         min_value=100,
         max_value=1000,
         value=500,
-        step=50
+        step=50,
+        help="Maximum tokens for research agent response"
     )
     
     max_tokens_writer = st.number_input(
@@ -181,7 +194,8 @@ with st.sidebar:
         min_value=100,
         max_value=500,
         value=300,
-        step=50
+        step=50,
+        help="Maximum tokens for writer agent response"
     )
     
     st.markdown("---")
@@ -211,19 +225,25 @@ with col1:
 
 with col2:
     st.subheader("ℹ️ Example Topics")
-    st.markdown("""
-    - The future of renewable energy
-    - Impact of quantum computing
-    - Sustainable agriculture practices
-    - Future of remote work
-    - AI in education
-    """)
+    example_topics = [
+        "The future of renewable energy",
+        "Impact of quantum computing",
+        "Sustainable agriculture practices",
+        "Future of remote work",
+        "AI in education"
+    ]
+    for example in example_topics:
+        if st.button(f"📌 {example}", key=example, use_container_width=True):
+            topic = example
+            st.rerun()
 
 # Session state to store results
 if 'workflow_results' not in st.session_state:
     st.session_state.workflow_results = None
 if 'processing' not in st.session_state:
     st.session_state.processing = False
+if 'current_topic' not in st.session_state:
+    st.session_state.current_topic = ""
 
 # Process the workflow
 if run_button and topic:
@@ -232,21 +252,23 @@ if run_button and topic:
     else:
         st.session_state.processing = True
         st.session_state.workflow_results = None
+        st.session_state.current_topic = topic
         
         # Create progress indicators
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         try:
-            # Initialize workflow
+            # Initialize workflow with dynamic parameters
             status_text.text("🔄 Initializing workflow...")
             progress_bar.progress(10)
             
-            workflow = TwoAgentFlow(api_key=api_key)
-            
-            # Update global temperature and token limits
-            global TEMPERATURE
-            TEMPERATURE = temperature
+            workflow = TwoAgentFlow(
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens_research=max_tokens_research,
+                max_tokens_writer=max_tokens_writer
+            )
             
             # Run the workflow
             status_text.text("🔍 Research Agent is gathering information...")
@@ -256,7 +278,7 @@ if run_button and topic:
             research_placeholder = st.empty()
             writer_placeholder = st.empty()
             
-            # Custom research agent with progress
+            # Research phase
             with st.spinner("Researching..."):
                 raw_data = workflow.research_agent(topic)
                 research_placeholder.markdown("""
@@ -268,6 +290,7 @@ if run_button and topic:
             
             status_text.text("✍️ Writer Agent is creating the final report...")
             
+            # Writing phase
             with st.spinner("Writing..."):
                 final_output = workflow.writer_agent(raw_data)
                 writer_placeholder.markdown("""
@@ -281,7 +304,11 @@ if run_button and topic:
             st.session_state.workflow_results = {
                 "success": True,
                 "raw_data": raw_data,
-                "final_output": final_output
+                "final_output": final_output,
+                "topic": topic,
+                "temperature": temperature,
+                "max_tokens_research": max_tokens_research,
+                "max_tokens_writer": max_tokens_writer
             }
             
             progress_bar.progress(100)
@@ -291,7 +318,8 @@ if run_button and topic:
             st.error(f"❌ Error: {str(e)}")
             st.session_state.workflow_results = {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "topic": topic
             }
         
         finally:
@@ -313,8 +341,27 @@ if st.session_state.workflow_results and not st.session_state.processing:
             </div>
             """, unsafe_allow_html=True)
             
-            # Copy button
-            st.button("📋 Copy to Clipboard", key="copy_final")
+            # Copy button functionality with JavaScript
+            st.markdown("""
+            <script>
+            function copyToClipboard() {
+                const text = document.querySelector('.final-report').innerText;
+                navigator.clipboard.writeText(text);
+            }
+            </script>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📋 Copy to Clipboard"):
+                    st.info("Copied to clipboard! (Note: Copy manually in web interface)")
+            with col2:
+                st.download_button(
+                    label="💾 Download Summary",
+                    data=results["final_output"],
+                    file_name=f"{results['topic'].replace(' ', '_')}_summary.txt",
+                    mime="text/plain"
+                )
         
         with tab2:
             st.markdown("### 🔍 Research Data")
@@ -324,25 +371,42 @@ if st.session_state.workflow_results and not st.session_state.processing:
             st.download_button(
                 label="💾 Download Raw Data",
                 data=results["raw_data"],
-                file_name="research_data.txt",
+                file_name=f"{results['topic'].replace(' ', '_')}_research.txt",
                 mime="text/plain"
             )
         
         with tab3:
             st.markdown("### 📊 Workflow Information")
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Model Used", MODEL_NAME)
-                st.metric("Temperature", temperature)
+                st.metric("Model Used", CONFIG["MODEL_NAME"])
+                st.metric("Temperature", results["temperature"])
             with col2:
-                st.metric("Research Tokens", max_tokens_research)
-                st.metric("Writer Tokens", max_tokens_writer)
+                st.metric("Research Tokens", results["max_tokens_research"])
+                st.metric("Writer Tokens", results["max_tokens_writer"])
+            with col3:
+                st.metric("Status", "✅ Completed")
             
             st.markdown("#### Topic Analyzed")
-            st.info(topic)
+            st.info(results["topic"])
     
     else:
         st.error(f"❌ Workflow failed: {results['error']}")
+        
+        # Show troubleshooting tips
+        with st.expander("🔧 Troubleshooting Tips"):
+            st.markdown("""
+            **Common issues and solutions:**
+            1. **Invalid API Key**: Make sure your Groq API key is correct and active
+            2. **Network Issues**: Check your internet connection
+            3. **Rate Limits**: You might have exceeded API rate limits, wait a moment and try again
+            4. **Topic Too Complex**: Try a simpler topic first
+            5. **Token Limits**: Adjust max tokens in sidebar if responses are being truncated
+            
+            **Get help:**
+            - Get API key: https://console.groq.com/keys
+            - Check Groq status: https://status.groq.com
+            """)
 
 # Footer
 st.markdown("---")
@@ -352,8 +416,9 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Refresh button to clear results
+# Clear results button
 if st.session_state.workflow_results:
-    if st.button("🔄 Clear Results & Start Over"):
+    if st.button("🔄 Clear Results & Start Over", use_container_width=True):
         st.session_state.workflow_results = None
+        st.session_state.processing = False
         st.rerun()
